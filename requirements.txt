@@ -1,0 +1,9 @@
+langchain
+langchain-google-genai
+langgraph
+pydantic
+moviepy==1.0.3
+edge-tts
+pillow
+python-dotenv
+streamlit
