@@ -4,12 +4,8 @@
 # Agent and not a multi-round back-and-forth like Interview Dojo --
 # write_script always runs, then add_captions always runs after it.
 # No branching. I still built it as a LangGraph instead of just two
-# plain function calls because the state (topic, tone, hook, scenes,
-# captions) needs to travel through both steps cleanly, and because
-# it's the same state shape the rest of the app (tts.py, render.py)
-# reads from -- keeping it as a graph state means every downstream
-# step has one predictable place to pull data from instead of
-# threading five separate variables through the whole pipeline.
+# plain function calls because the state (topic, tone, language, hook, scenes,
+# captions) needs to travel through both steps cleanly.
 
 import os
 from typing import TypedDict, List, Optional
@@ -26,6 +22,7 @@ load_dotenv()
 class ReelState(TypedDict):
     topic: str
     tone: str
+    language: str
     hook: Optional[str]
     narrations: Optional[List[str]]
     cta: Optional[str]
@@ -36,17 +33,27 @@ class ReelState(TypedDict):
 
 def _llm():
     return ChatGoogleGenerativeAI(
-        model="gemini-flash-latest",
-        temperature=0.7,  # scripts need more personality than a code-gen agent does
+        model="gemini-3.5-flash-lite",
+        temperature=0.7,
         google_api_key=os.getenv("GOOGLE_API_KEY"),
     )
 
 
 def write_script_node(state: ReelState) -> ReelState:
-    prompt = f"""Write a short-form vertical video script (like an Instagram
-Reel / YouTube Short) about: {state['topic']}
+    lang = state.get("language", "English")
+
+    lang_instruction = ""
+    if "Hindi (हिन्दी)" in lang:
+        lang_instruction = "CRITICAL: Write the entire script strictly in Hindi using Devanagari script (हिन्दी लिपि). Ensure natural spoken flow with pure Indian conversational rhythm."
+    elif "Hinglish" in lang:
+        lang_instruction = "CRITICAL: Write the entire script in Hinglish (Hindi words written using the English/Latin alphabet, e.g. 'Yeh galti har koi karta hai')."
+    else:
+        lang_instruction = "CRITICAL: Write the entire script in clear, punchy English."
+
+    prompt = f"""Write a short-form vertical video script (like an Instagram Reel / YouTube Short) about: {state['topic']}
 
 Tone: {state['tone']}
+Language Rule: {lang_instruction}
 
 Rules:
 - Hook must work with zero context, first 2 seconds, no "hey guys welcome back"
@@ -65,11 +72,17 @@ Rules:
 
 def add_captions_node(state: ReelState) -> ReelState:
     scenes_block = "\n".join(f"{i+1}. {n}" for i, n in enumerate(state["narrations"]))
+    lang = state.get("language", "English")
 
-    prompt = f"""Here is a voiceover script. For each line, write a SHORT
-on-screen caption version -- these get burned onto the video as bold
-text, so they need to be scannable in under a second. Cut every word
-that isn't load-bearing.
+    lang_caption_rule = (
+        "Write the captions in matching Hindi (Devanagari script)."
+        if "Hindi (हिन्दी)" in lang
+        else ("Write the captions in Hinglish (Roman English alphabet)." if "Hinglish" in lang else "Write the captions in English.")
+    )
+
+    prompt = f"""Here is a voiceover script. For each line, write a SHORT on-screen caption version (2-5 words max) -- these get burned onto the video as bold text, so they need to be scannable in under a second. Cut every word that isn't load-bearing.
+
+Language Rule: {lang_caption_rule}
 
 Hook (spoken): {state['hook']}
 Body scenes (spoken):
@@ -98,10 +111,11 @@ def build_graph():
 _agent = build_graph()
 
 
-def generate_script(topic: str, tone: str = "confident, no fluff") -> ReelState:
+def generate_script(topic: str, tone: str = "confident, no fluff", language: str = "English") -> ReelState:
     return _agent.invoke({
         "topic": topic,
         "tone": tone,
+        "language": language,
         "hook": None,
         "narrations": None,
         "cta": None,
